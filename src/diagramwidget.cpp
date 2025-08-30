@@ -351,13 +351,19 @@ void TSAWidget::paintEvent(QPaintEvent *)
     // 1) Fill background
     p.fillRect(rect(), Qt::black);
 
-    // 2) Get dynamic positions
+    // 2) Get dynamic positions  
     QPointF sensorPos = getSensorPosition();
     QPointF shipPos = getShipPosition();
 
-    // 2a) Compute full-screen line for shading calculations only
+    // 2a) Compute full-screen intersections of the sensor→ship line
     auto full = computeFullLine(sensorPos, shipPos, rect());
     QPointF P1 = full.first, P2 = full.second;
+
+    // 2b) Determine which endpoint is the "far end" (opposite side from sensor)
+    QPointF farEnd;
+    double dist1 = std::hypot(P1.x() - sensorPos.x(), P1.y() - sensorPos.y());
+    double dist2 = std::hypot(P2.x() - sensorPos.x(), P2.y() - sensorPos.y());
+    farEnd = (dist1 > dist2) ? P1 : P2;  // Pick the farther point from sensor
 
     // 3) Gather all vector endpoints
     QVector<QPointF> endpoints;
@@ -373,10 +379,10 @@ void TSAWidget::paintEvent(QPaintEvent *)
                   QPointF(45*qSin(qDegreesToRadians(180.0)),
                           -45*qCos(qDegreesToRadians(180.0))));
 
-    // 4) Compute dynamic gap using sensor→ship segment
+    // 4) Compute dynamic gap using farEnd→ship segment
     auto distanceToLine = [&](const QPointF &pt) {
-        // Distance from point to sensor→ship segment
-        QPointF d = shipPos - sensorPos, v = pt - sensorPos;
+        // Distance from point to farEnd→ship segment
+        QPointF d = shipPos - farEnd, v = pt - farEnd;
         double cross = std::abs(d.x()*v.y() - d.y()*v.x());
         return cross / std::hypot(d.x(), d.y());
     };
@@ -402,10 +408,10 @@ void TSAWidget::paintEvent(QPaintEvent *)
         bp.setPen(Qt::NoPen);
         bp.drawPolygon(half);
 
-        // Clear corridor along sensor→ship segment (not full screen)
+        // Clear corridor along farEnd→ship segment  
         bp.setCompositionMode(QPainter::CompositionMode_Clear);
         bp.setPen(QPen(Qt::transparent, gap*2, Qt::SolidLine, Qt::FlatCap));
-        bp.drawLine(sensorPos, shipPos);
+        bp.drawLine(farEnd, shipPos);
 
         // Clear around endpoints
         constexpr int R = 12;
@@ -415,9 +421,9 @@ void TSAWidget::paintEvent(QPaintEvent *)
     }
     p.drawImage(0,0,bandImg);
 
-    // 6) Draw beam from sensor to ship (dynamic length)
+    // 6) Draw beam from far screen edge to ship (dynamic end)
     p.setPen(QPen(Qt::green,4,Qt::SolidLine,Qt::RoundCap));
-    p.drawLine(sensorPos, shipPos);
+    p.drawLine(farEnd, shipPos);
     p.setBrush(Qt::yellow); p.setPen(Qt::NoPen); p.drawEllipse(shipPos,6,6);
     p.setBrush(Qt::red);                   p.drawEllipse(sensorPos,6,6);
 
