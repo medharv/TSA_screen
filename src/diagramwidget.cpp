@@ -434,11 +434,5 @@ void TSAWidget::paintEvent(QPaintEvent *)
     );
     drawArrow(p, sensorPos, adotEnd,12,25,Qt::red,3);
 
-    // Bearing-rate (cyan)
-    QPointF rateStart = sensorPos + QPointF(25,25);
-    QPointF rateEnd = rateStart + QPointF(
-        45*qSin(qDegreesToRadians(180.0)),
-       -45*qCos(qDegreesToRadians(180.0))
-    );
-    drawArrow(p, rateStart, rateEnd,8,30,Qt::cyan,2);
+    // Bearing-rate vector removed - no longer displayed
 } 
