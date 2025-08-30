@@ -16,6 +16,13 @@ This application simulates a Tactical Situation Awareness (TSA) screen commonly 
 
 ## Latest Features
 
+### Proper Half-Space Shading
+- **Extended White Outline**: White boundary line now extends to screen edges
+- **Complete Half-Space Coverage**: Shaded region covers entire screen area on correct side
+- **Polygon-Based Filling**: Uses Qt's built-in diagonal pattern for reliable hatching
+- **Boundary Detection**: Automatically determines which screen corners belong to shaded side
+- **Dynamic Shading**: Shaded region adjusts based on ship vector direction
+
 ### Dynamic Gap Calculation
 - **Automatic Clearance**: Shaded region automatically adjusts to avoid overlapping vectors
 - **Vector Endpoint Tracking**: Monitors all vector endpoints for minimum distance calculation
@@ -42,6 +49,7 @@ This application simulates a Tactical Situation Awareness (TSA) screen commonly 
 - Intelligent sensor coverage visualization
 - Smooth Qt-based rendering with anti-aliasing
 - Automatic gap management for clean display
+- Complete half-space shading with screen boundary coverage
 
 ## Build Requirements
 
@@ -83,6 +91,7 @@ TSA_Screen/
 - **Dynamic Drawing System**: Renders all visual elements with intelligent gap management
 - **Vector Analysis**: Calculates and displays tactical vectors with endpoint tracking
 - **Off-screen Rendering**: Uses QImage for clean background preservation
+- **Half-Space Shading**: Complete polygon-based shading with screen boundary coverage
 
 ### Simulation Parameters
 - **Own Ship**: Course 0° (North), Speed 10 knots, Depth 40m
@@ -97,8 +106,42 @@ TSA_Screen/
 4. **Yellow Own Ship**: Current vessel position with velocity vector
 5. **Red Sensor Marker**: Sensor position on beam line
 6. **Tactical Vectors**: Various colored arrows for analysis
+7. **White Outline**: Extended boundary line defining shaded region
 
 ## Technical Implementation
+
+### Half-Space Shading Algorithm
+```cpp
+// Create proper polygon that covers the entire shaded half-space
+const qreal gap = 15.0;
+QPointF offsetStart = farEnd + normal * gap;
+QPointF offsetEnd = shipPos + normal * gap;
+
+// Get full-screen line for the white outline (extended to boundaries)
+auto fullOutline = computeFullLine(offsetStart, offsetEnd, rect());
+QPointF outlineP1 = fullOutline.first, outlineP2 = fullOutline.second;
+
+// Build polygon with screen corners on the shaded side
+QPolygonF shadedRegion;
+QVector<QPointF> corners = {rect().topLeft(), rect().topRight(), 
+                            rect().bottomRight(), rect().bottomLeft()};
+
+// Add corners that are on the shaded side
+for (auto &corner : corners) {
+    bool cornerOnShadedSide = (sideOfLine(farEnd, shipPos, corner) > 0) == !shipVectorLeft;
+    if (cornerOnShadedSide) {
+        shadedRegion << corner;
+    }
+}
+
+// Add the extended outline line points
+shadedRegion << outlineP2 << outlineP1;
+
+// Fill with hatching pattern
+p.setBrush(QBrush(QColor(100,100,100,150), Qt::BDiagPattern));
+p.setPen(Qt::NoPen);
+p.drawPolygon(shadedRegion);
+```
 
 ### Dynamic Gap Algorithm
 ```cpp
@@ -125,6 +168,7 @@ The application runs automatically with continuous simulation updates. The displ
 - Visual representation of tactical situation with dynamic shading
 - Vector analysis for course planning
 - Automatic gap management for clean visual separation
+- Complete half-space shading extending to screen boundaries
 
 ## Technical Details
 
@@ -133,6 +177,7 @@ The application runs automatically with continuous simulation updates. The displ
 - **Math**: Trigonometric calculations for bearing/range and vector distances
 - **Memory**: Automatic Qt memory management with RAII
 - **Performance**: Efficient rendering with minimal redraws
+- **Shading**: Polygon-based half-space filling with Qt diagonal patterns
 
 ## Development Notes
 
@@ -144,6 +189,9 @@ The application runs automatically with continuous simulation updates. The displ
 
 ## Recent Updates
 
+- **Proper Half-Space Shading**: Extended white outline to screen boundaries for complete coverage
+- **Polygon-Based Filling**: Replaced manual hatching with Qt's built-in diagonal patterns
+- **Screen Boundary Detection**: Automatic inclusion of screen corners in shaded region
 - **Dynamic Gap Calculation**: Automatic clearance between shaded region and vectors
 - **Refined Beam Rendering**: Ship-terminated beam with proper endpoints
 - **Off-screen Rendering**: Clean background preservation with transparency
