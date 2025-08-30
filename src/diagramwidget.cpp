@@ -367,14 +367,16 @@ void TSAWidget::paintEvent(QPaintEvent *)
     QPointF normal(-dir.y(), dir.x());
     normal /= std::hypot(normal.x(), normal.y());
     
-    // FIXED: Determine which side to shade based on ship position
-    bool shipLeft = sideOfLine(farEnd, shipPos, shipPos + QPointF(0, -10)) > 0;
-    if (shipLeft) {
-        // Ship is on left, shade right side (keep normal as-is)
-    } else {
-        // Ship is on right, shade left side (flip normal)
+    // FIXED: Check which side the ship's vector points to
+    QPointF shipVector = QPointF(0, -S_own*6); // ship moves north
+    QPointF testPoint = shipPos + shipVector; // where ship is heading
+    
+    bool shipVectorLeft = sideOfLine(farEnd, shipPos, testPoint) > 0;
+    if (!shipVectorLeft) {
+        // Ship vector is on right side, so shade left side
         normal = -normal;
     }
+    // If ship vector is on left side, shade right side (keep normal as-is)
     
     // Draw hatched lines - make them more visible
     for (int i = 15; i < 300; i += 8) {
