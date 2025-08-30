@@ -362,20 +362,19 @@ void TSAWidget::paintEvent(QPaintEvent *)
     double dist1 = std::hypot(P1.x() - shipPos.x(), P1.y() - shipPos.y());
     QPointF farEnd = (dist1 > std::hypot(P2.x() - shipPos.x(), P2.y() - shipPos.y())) ? P1 : P2;
     
-    // SIMPLE: Just draw a thick line on one side
+    // Create normal vector
     QPointF dir = shipPos - farEnd;
     QPointF normal(-dir.y(), dir.x());
     normal /= std::hypot(normal.x(), normal.y());
     
-    // Determine which side to shade (opposite of ship vector)
-    QPointF shipVector = QPointF(0, -S_own*6); // ship goes north
-    bool shadeRight = (normal.x() * shipVector.x() + normal.y() * shipVector.y()) < 0;
+    // Determine which side to shade - always shade the bottom/right side
+    if (normal.y() > 0 || (normal.y() == 0 && normal.x() < 0)) {
+        normal = -normal;
+    }
     
-    if (!shadeRight) normal = -normal;
-    
-    // Create a WIDE band on the shaded side
-    for (int i = 10; i < 200; i += 5) {
-        QPen pen(QColor(80,80,80,30), 5);
+    // Draw hatched lines - make them more visible
+    for (int i = 15; i < 300; i += 8) {
+        QPen pen(QColor(100,100,100,120), 3);  // Increased opacity and thickness
         p.setPen(pen);
         QPointF offset1 = farEnd + normal * i;
         QPointF offset2 = shipPos + normal * i;
