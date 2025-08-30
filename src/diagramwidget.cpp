@@ -1,5 +1,6 @@
 #include "diagramwidget.h"
 #include <QPainter>
+#include <QPainterPath>
 #include <QDebug>
 
 /**
@@ -188,61 +189,146 @@ static qreal sideOfLine(const QPointF &A, const QPointF &B, const QPointF &P) {
 }
 
 /**
- * @brief Draws the cross-hatched inactive sensor region
- * 
- * Creates a gray cross-hatched area on the opposite side of the sensor beam
- * from the ship position, using a bounding box approach for clean clipping.
- * 
- * @param p QPainter reference for drawing
+ * @brief Returns the two points where line through A→B intersects the widget rectangle
+ * @param A First point of the line
+ * @param B Second point of the line
+ * @param rect Widget rectangle bounds
+ * @return Pair of intersection points spanning the full widget
  */
-void TSAWidget::drawHatchedArea(QPainter &p)
+QPair<QPointF,QPointF> computeFullLine(const QPointF &A, const QPointF &B, const QRectF &rect)
 {
-    QPointF P1 = sensor_line_start;
-    QPointF P2 = sensor_line_end;
-    QPointF shipPos = getShipPosition();
+    // Line: parametric P(t)=A+t*(B–A). Compute intersections with each of the four edges.
+    QVector<QPointF> hits;
+    QPointF d = B - A;
 
-    // 1. Determine which side is SHIP side
-    bool shipOnLeft = sideOfLine(P1, P2, shipPos) > 0;
-
-    // 2. Build AABB around beam
-    qreal minX = qMin(P1.x(), P2.x());
-    qreal maxX = qMax(P1.x(), P2.x());
-    qreal minY = qMin(P1.y(), P2.y());
-    qreal maxY = qMax(P1.y(), P2.y());
-
-    // 3. Compute margin = 20% of max dimension
-    qreal w = maxX - minX;
-    qreal h = maxY - minY;
-    qreal m = 0.2 * qMax(w, h);
-
-    // 4. Expand box
-    minX -= m; maxX += m;
-    minY -= m; maxY += m;
-
-    // 5. Collect box corners
-    QVector<QPointF> corners = {
-        {minX, minY}, {maxX, minY},
-        {maxX, maxY}, {minX, maxY}
+    auto intersect = [&](double x, double yMin, double yMax, bool vertical) {
+        // if vertical edge: x=x0, solve t = (x0–Ax)/dx, then y=Ay+t*dy must lie between yMin,yMax
+        // if horizontal edge: same logic swapping axes
+        double t = vertical
+            ? (x - A.x()) / d.x()
+            : (x - A.y()) / d.y();
+        QPointF P = A + t * d;
+        double y = vertical ? P.y() : P.x();
+        if (vertical ? (y >= yMin && y <= yMax)
+                     : (y >= yMin && y <= yMax))
+            hits.append(P);
     };
 
-    // 6. Keep only corners on SHADED side (opposite of ship)
-    QVector<QPointF> polyPts;
-    for (auto &pt : corners) {
-        bool left = sideOfLine(P1, P2, pt) > 0;
-        if (left != shipOnLeft)
-            polyPts.append(pt);
+    // Left edge (x=rect.left())
+    if (!qFuzzyIsNull(d.x()))
+        intersect(rect.left(), rect.top(), rect.bottom(), /*vertical*/true);
+    // Right edge
+    if (!qFuzzyIsNull(d.x()))
+        intersect(rect.right(), rect.top(), rect.bottom(), true);
+    // Top edge (y=rect.top())
+    if (!qFuzzyIsNull(d.y()))
+        intersect(rect.top(), rect.left(), rect.right(), /*vertical*/false);
+    // Bottom edge
+    if (!qFuzzyIsNull(d.y()))
+        intersect(rect.bottom(), rect.left(), rect.right(), false);
+
+    // Keep only two unique intersection points (simple approach)
+    QVector<QPointF> pts;
+    for (const auto &hit : hits) {
+        bool found = false;
+        for (const auto &pt : pts) {
+            if (qAbs(hit.x() - pt.x()) < 1e-6 && qAbs(hit.y() - pt.y()) < 1e-6) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            pts.append(hit);
+            if (pts.size() >= 2) break;
+        }
     }
+    
+    if (pts.size() >= 2)
+        return { pts[0], pts[1] };
+    return { A, B }; // fallback
+}
 
-    // 7. Always include the beam endpoints to close the polygon
-    polyPts.append(P2);
-    polyPts.append(P1);
+/**
+ * @brief Clip the half-space on the sideSelected side of line A→B to the rect
+ * @param A First point of the line
+ * @param B Second point of the line
+ * @param bounds Widget rectangle bounds
+ * @param sideSelectedIsLeft Whether the selected side is left of the line
+ * @return Polygon representing the clipped half-space
+ */
+QPolygonF TSAWidget::buildHalfSpacePoly(
+    const QPointF &A, const QPointF &B,
+    const QRectF &bounds,
+    bool sideSelectedIsLeft)
+{
+    // Collect rectangle corners
+    QVector<QPointF> pts = {
+        bounds.topLeft(), bounds.topRight(),
+        bounds.bottomRight(), bounds.bottomLeft()
+    };
+    // Keep corners on selected side
+    QPolygonF poly;
+    for (auto &pt : pts) {
+        bool left = sideOfLine(A, B, pt) > 0;
+        if (left == sideSelectedIsLeft)
+            poly.append(pt);
+    }
+    // Add beam-rect intersections
+    auto inte = computeFullLine(A, B, bounds);
+    for (auto &pt : {inte.first, inte.second}) {
+        bool left = sideOfLine(A, B, pt) > 0;
+        if (left == sideSelectedIsLeft)
+            poly.append(pt);
+    }
+    // Return a convex hull to ensure correct winding
+    return buildConvexHull(QVector<QPointF>(poly.begin(), poly.end()));
+}
 
-    // 8. Draw hatched area
-    QPolygonF hatched(polyPts);
-    QBrush hatch(QColor(80,80,80,150), Qt::BDiagPattern);
-    p.setBrush(hatch);
-    p.setPen(Qt::NoPen);
-    p.drawPolygon(hatched);
+/**
+ * @brief Builds a convex hull from a set of points using Graham scan
+ * @param points Input points
+ * @return Convex hull polygon
+ */
+QPolygonF TSAWidget::buildConvexHull(const QVector<QPointF> &points)
+{
+    if (points.size() < 3) {
+        return QPolygonF(points);
+    }
+    
+    // Find the point with lowest y-coordinate (and leftmost if tied)
+    int lowest = 0;
+    for (int i = 1; i < points.size(); ++i) {
+        if (points[i].y() < points[lowest].y() || 
+            (points[i].y() == points[lowest].y() && points[i].x() < points[lowest].x())) {
+            lowest = i;
+        }
+    }
+    
+    // Sort points by polar angle with respect to lowest point
+    QVector<QPointF> sorted = points;
+    std::swap(sorted[0], sorted[lowest]);
+    
+    // Sort remaining points by polar angle
+    std::sort(sorted.begin() + 1, sorted.end(), [&](const QPointF &a, const QPointF &b) {
+        double angleA = qAtan2(a.y() - sorted[0].y(), a.x() - sorted[0].x());
+        double angleB = qAtan2(b.y() - sorted[0].y(), b.x() - sorted[0].x());
+        return angleA < angleB;
+    });
+    
+    // Graham scan
+    QVector<QPointF> hull;
+    hull.push_back(sorted[0]);
+    hull.push_back(sorted[1]);
+    
+    for (int i = 2; i < sorted.size(); ++i) {
+        while (hull.size() > 1 && 
+               sideOfLine(hull[hull.size()-2], hull[hull.size()-1], sorted[i]) <= 0) {
+            hull.pop_back();
+        }
+        hull.push_back(sorted[i]);
+    }
+    
+    return QPolygonF(hull);
 }
 
 /**
@@ -250,73 +336,109 @@ void TSAWidget::drawHatchedArea(QPainter &p)
  * 
  * This method draws all visual elements in the correct order:
  * 1. Black background
- * 2. Green sensor beam line
- * 3. Gray hatched inactive region
- * 4. Ship and sensor markers
- * 5. Various tactical vectors
+ * 2. Full far-side half-space with hatch
+ * 3. Punch out clear corridor along beam
+ * 4. Punch out circles around vector origins
+ * 5. Draw beam and vectors on top
  * 
  * @param event Paint event information (unused)
  */
-void TSAWidget::paintEvent(QPaintEvent * /*event*/)
+void TSAWidget::paintEvent(QPaintEvent *)
 {
     QPainter p(this);
-    p.setRenderHint(QPainter::Antialiasing);  // Smooth rendering
+    p.setRenderHint(QPainter::Antialiasing);
 
-    // 1. Draw black background (standard tactical display)
+    // 1) Fill background
     p.fillRect(rect(), Qt::black);
 
-    // 2. Draw green sensor beam line
-    p.setPen(QPen(Qt::green, 4, Qt::SolidLine, Qt::RoundCap));
-    p.drawLine(sensor_line_start, sensor_line_end);
+    // 2) Full-screen beam endpoints
+    auto full = computeFullLine(sensor_line_start, sensor_line_end, rect());
+    QPointF P1 = full.first, P2 = full.second;
 
-    // 3. Draw hatched region BELOW beam (inactive sensor area)
-    drawHatchedArea(p);
+    // 3) Gather all vector endpoints
+    QVector<QPointF> endpoints;
+    endpoints << getShipPosition()
+              << (getShipPosition() +
+                  QPointF(S_own*6*qSin(qDegreesToRadians(C_own)),
+                          -S_own*6*qCos(qDegreesToRadians(C_own))))
+              << getSensorPosition()
+              << (getSensorPosition() +
+                  QPointF(80*qSin(qDegreesToRadians(225.0)),
+                          -80*qCos(qDegreesToRadians(225.0))))
+              << (getSensorPosition() + QPointF(25,25) +
+                  QPointF(45*qSin(qDegreesToRadians(180.0)),
+                          -45*qCos(qDegreesToRadians(180.0))));
 
-    // 4. Draw ship and sensor position markers
+    // 4) Compute dynamic gap = min distance from endpoints to beam + margin
+    auto distanceToLine = [&](const QPointF &pt) {
+        // |cross(B–A, P–A)| / |B–A|
+        QPointF d = P2 - P1, v = pt - P1;
+        double cross = std::abs(d.x()*v.y() - d.y()*v.x());
+        return cross / std::hypot(d.x(), d.y());
+    };
+    double minDist = std::numeric_limits<double>::infinity();
+    for (auto &pt : endpoints)
+        minDist = std::min(minDist, distanceToLine(pt));
+
+    const double safetyMargin = 5.0;          // extra pixels
+    double gap = minDist + safetyMargin;
+
+    // 5) Build and draw hatched half-space with this gap
+    bool shipLeft  = sideOfLine(P1,P2,getShipPosition()) > 0;
+    bool shadeLeft = shipLeft;
+    QPolygonF half = buildHalfSpacePoly(P1, P2, rect(), shadeLeft);
+
+    // Render to off-screen image to preserve background
+    QImage bandImg(size(), QImage::Format_ARGB32_Premultiplied);
+    bandImg.fill(Qt::transparent);
+    {
+        QPainter bp(&bandImg);
+        bp.setRenderHint(QPainter::Antialiasing);
+        bp.setBrush(QBrush(QColor(80,80,80,150), Qt::BDiagPattern));
+        bp.setPen(Qt::NoPen);
+        bp.drawPolygon(half);
+
+        // Clear corridor = 2*gap width
+        bp.setCompositionMode(QPainter::CompositionMode_Clear);
+        bp.setPen(QPen(Qt::transparent, gap*2, Qt::SolidLine, Qt::FlatCap));
+        bp.drawLine(P1, P2);
+
+        // Clear around endpoints
+        constexpr int R = 12;
+        for (auto &pt : QVector<QPointF>{ getShipPosition(),
+              getSensorPosition() })
+            bp.drawEllipse(pt, R, R);
+    }
+    p.drawImage(0,0,bandImg);
+
+    // 6) Draw beam and vectors
+    p.setPen(QPen(Qt::green,4,Qt::SolidLine,Qt::RoundCap));
+    p.drawLine(P1,P2);
+
     QPointF shipPos   = getShipPosition();
     QPointF sensorPos = getSensorPosition();
-    
-    // Own ship marker (yellow circle)
-    p.setBrush(Qt::yellow);
-    p.drawEllipse(shipPos, 6, 6);
-    
-    // Sensor marker (red circle)
-    p.setBrush(Qt::red);
-    p.drawEllipse(sensorPos, 6, 6);
+    p.setBrush(Qt::yellow); p.setPen(Qt::NoPen); p.drawEllipse(shipPos,6,6);
+    p.setBrush(Qt::red);                   p.drawEllipse(sensorPos,6,6);
 
-    // 5. Draw tactical vectors for analysis
-    
-    // Own ship velocity vector (CYAN) - heading North at 10 knots
+    // Own-ship vector (cyan)
     QPointF ownEnd = shipPos + QPointF(
-        S_own * 6.0 * qSin(qDegreesToRadians(C_own)),
-       -S_own * 6.0 * qCos(qDegreesToRadians(C_own))
+        S_own*6*qSin(qDegreesToRadians(C_own)),
+       -S_own*6*qCos(qDegreesToRadians(C_own))
     );
-    drawArrow(p, shipPos, ownEnd, 12, 25, Qt::cyan, 3);
+    drawArrow(p, shipPos, ownEnd,12,25,Qt::cyan,3);
 
-    // Trial track vector (YELLOW) - potential course change (+20° from current)
-    double trialAng = C_own + 20.0;
-    QPointF trialEnd = shipPos + QPointF(
-        S_own * 5.5 * qSin(qDegreesToRadians(trialAng)),
-       -S_own * 5.5 * qCos(qDegreesToRadians(trialAng))
+    // Adopted track (red)
+    QPointF adotEnd = sensorPos + QPointF(
+        80*qSin(qDegreesToRadians(225.0)),
+       -80*qCos(qDegreesToRadians(225.0))
     );
-    drawArrow(p, shipPos, trialEnd, 12, 25, Qt::yellow, 3);
+    drawArrow(p, sensorPos, adotEnd,12,25,Qt::red,3);
 
-    // Adopted track vector (RED) - tactical direction from sensor
-    double adoptedLen = 80.0;
-    double adoptedAng = 225.0; // Southwest direction
-    QPointF adoptedEnd = sensorPos + QPointF(
-        adoptedLen * qSin(qDegreesToRadians(adoptedAng)),
-       -adoptedLen * qCos(qDegreesToRadians(adoptedAng))
+    // Bearing-rate (cyan)
+    QPointF rateStart = sensorPos + QPointF(25,25);
+    QPointF rateEnd = rateStart + QPointF(
+        45*qSin(qDegreesToRadians(180.0)),
+       -45*qCos(qDegreesToRadians(180.0))
     );
-    drawArrow(p, sensorPos, adoptedEnd, 12, 25, Qt::red, 3);
-
-    // Bearing rate orientation vector (CYAN) - shows rate of bearing change
-    double rateLen = 45.0;
-    double rateAng = 180.0; // South direction
-    QPointF rateStart = sensorPos + QPointF(25, 25);
-    QPointF rateEnd   = rateStart + QPointF(
-        rateLen * qSin(qDegreesToRadians(rateAng)),
-       -rateLen * qCos(qDegreesToRadians(rateAng))
-    );
-    drawArrow(p, rateStart, rateEnd, 8, 30, Qt::cyan, 2);
+    drawArrow(p, rateStart, rateEnd,8,30,Qt::cyan,2);
 } 
