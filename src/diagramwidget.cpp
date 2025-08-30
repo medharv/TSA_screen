@@ -128,7 +128,14 @@ double TSAWidget::calculateBearing(double x, double y) const
  */
 QPointF TSAWidget::getShipPosition() const
 {
-    return sensor_line_start + 0.75 * (sensor_line_end - sensor_line_start);
+    // Use widget center as reference and apply simulation-based movement
+    QPointF center(width()/2, height()/2);
+    
+    // Convert simulation time to ship movement (own ship moves North)
+    double t = current_time_sec / 3600.0; // hours
+    double ship_y_offset = -S_own * t * 10; // scale factor for display
+    
+    return center + QPointF(0, ship_y_offset);
 }
 
 /**
@@ -137,7 +144,14 @@ QPointF TSAWidget::getShipPosition() const
  */
 QPointF TSAWidget::getSensorPosition() const
 {
-    return sensor_line_start + 0.45 * (sensor_line_end - sensor_line_start);
+    // Sensor position based on current bearing and range from target
+    QPointF center(width()/2, height()/2);
+    
+    // Calculate sensor position based on current bearing/range
+    double sensor_x = current_range * qSin(qDegreesToRadians(current_bearing)) * 5; // scale
+    double sensor_y = -current_range * qCos(qDegreesToRadians(current_bearing)) * 5;
+    
+    return center + QPointF(sensor_x, sensor_y);
 }
 
 /**
