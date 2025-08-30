@@ -1,0 +1,23 @@
+# Build artifacts
+*.o
+*.cpp.moc
+moc_*
+*.pro.user
+.qmake.stash
+TSAScreen
+TSA_Screen
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.log 
