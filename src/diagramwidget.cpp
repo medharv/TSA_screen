@@ -378,21 +378,39 @@ void TSAWidget::paintEvent(QPaintEvent *)
     }
     // If ship vector on RIGHT, shade LEFT (keep normal)
     
-    // EXTENDED: Draw hatched lines all the way to screen boundary
-    int maxExtent = qMax(width(), height()) + 200; // Ensure full coverage
-    for (int i = 15; i < maxExtent; i += 8) {
-        QPen pen(QColor(100,100,100,120), 3);
-        p.setPen(pen);
-        QPointF offset1 = farEnd + normal * i;
-        QPointF offset2 = shipPos + normal * i;
-        p.drawLine(offset1, offset2);
+    // FIXED: Create a proper polygon that covers the entire shaded half-space
+    const qreal gap = 15.0;
+    QPointF offsetStart = farEnd + normal * gap;
+    QPointF offsetEnd = shipPos + normal * gap;
+    
+    // Get full-screen line for the white outline (extended to boundaries)
+    auto fullOutline = computeFullLine(offsetStart, offsetEnd, rect());
+    QPointF outlineP1 = fullOutline.first, outlineP2 = fullOutline.second;
+    
+    // Build polygon with screen corners on the shaded side
+    QPolygonF shadedRegion;
+    QVector<QPointF> corners = {rect().topLeft(), rect().topRight(), 
+                                rect().bottomRight(), rect().bottomLeft()};
+    
+    // Add corners that are on the shaded side
+    for (auto &corner : corners) {
+        bool cornerOnShadedSide = (sideOfLine(farEnd, shipPos, corner) > 0) == !shipVectorLeft;
+        if (cornerOnShadedSide) {
+            shadedRegion << corner;
+        }
     }
     
-    // NEW: Add white outline at the edge of shaded region
-    QPointF outlineStart = farEnd + normal * 15; // Start of shaded area
-    QPointF outlineEnd = shipPos + normal * 15;
+    // Add the extended outline line points
+    shadedRegion << outlineP2 << outlineP1;
+    
+    // Fill with hatching pattern
+    p.setBrush(QBrush(QColor(100,100,100,150), Qt::BDiagPattern));
+    p.setPen(Qt::NoPen);
+    p.drawPolygon(shadedRegion);
+    
+    // Add white outline (extended to screen boundaries)
     p.setPen(QPen(Qt::white, 2, Qt::SolidLine));
-    p.drawLine(outlineStart, outlineEnd);
+    p.drawLine(outlineP1, outlineP2);
     
     // Draw green bearing line
     p.setPen(QPen(Qt::green, 4, Qt::SolidLine, Qt::RoundCap));
