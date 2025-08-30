@@ -1,11 +1,23 @@
 # Build artifacts
 *.o
-*.cpp.moc
-moc_*
-*.pro.user
-.qmake.stash
+*.so
+*.dll
+*.dylib
+*.exe
 TSAScreen
 TSA_Screen
+
+# Qt generated files
+moc_*.cpp
+moc_*.h
+ui_*.h
+qrc_*.cpp
+*.pro.user
+*.pro.user.*
+*.qbs.user
+*.qbs.user.*
+*.moc
+moc_predefs.h
 
 # IDE files
 .vscode/
@@ -14,10 +26,16 @@ TSA_Screen
 *.swo
 *~
 
-# OS files
+# OS generated files
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
 
 # Temporary files
 *.tmp
+*.temp
 *.log 
