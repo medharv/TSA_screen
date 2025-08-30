@@ -399,8 +399,8 @@ void TSAWidget::paintEvent(QPaintEvent *)
     QPointF ownEnd = shipPos + QPointF(0, -S_own*6);
     drawArrow(p, shipPos, ownEnd, 12, 25, Qt::cyan, 3);
 
-    // FIXED: Target vector - starts FROM bearing line, goes into shaded region
-    QPointF targetStart = sensorPos; // Start exactly on bearing line
-    QPointF targetEnd = targetStart + normal * 80; // Go INTO shaded region
+    // FIXED: Target vector - reverse direction
+    QPointF targetStart = sensorPos;
+    QPointF targetEnd = targetStart + (-normal) * 80; // Flip direction with -normal
     drawArrow(p, targetStart, targetEnd, 12, 25, Qt::red, 3);
 } 
