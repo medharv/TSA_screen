@@ -378,14 +378,21 @@ void TSAWidget::paintEvent(QPaintEvent *)
     }
     // If ship vector on RIGHT, shade LEFT (keep normal)
     
-    // Draw hatched lines - make them more visible
-    for (int i = 15; i < 300; i += 8) {
-        QPen pen(QColor(100,100,100,120), 3);  // Increased opacity and thickness
+    // EXTENDED: Draw hatched lines all the way to screen boundary
+    int maxExtent = qMax(width(), height()) + 200; // Ensure full coverage
+    for (int i = 15; i < maxExtent; i += 8) {
+        QPen pen(QColor(100,100,100,120), 3);
         p.setPen(pen);
         QPointF offset1 = farEnd + normal * i;
         QPointF offset2 = shipPos + normal * i;
         p.drawLine(offset1, offset2);
     }
+    
+    // NEW: Add white outline at the edge of shaded region
+    QPointF outlineStart = farEnd + normal * 15; // Start of shaded area
+    QPointF outlineEnd = shipPos + normal * 15;
+    p.setPen(QPen(Qt::white, 2, Qt::SolidLine));
+    p.drawLine(outlineStart, outlineEnd);
     
     // Draw green bearing line
     p.setPen(QPen(Qt::green, 4, Qt::SolidLine, Qt::RoundCap));
