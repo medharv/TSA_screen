@@ -354,42 +354,33 @@ void TSAWidget::paintEvent(QPaintEvent *)
     QPointF sensorPos = getSensorPosition();
     QPointF shipPos = getShipPosition();
     
-    // Get full-screen line endpoints
+    // Get full-screen line 
     auto full = computeFullLine(sensorPos, shipPos, rect());
     QPointF P1 = full.first, P2 = full.second;
     
-    // Find the far end
+    // Find far end
     double dist1 = std::hypot(P1.x() - shipPos.x(), P1.y() - shipPos.y());
-    double dist2 = std::hypot(P2.x() - shipPos.x(), P2.y() - shipPos.y());
-    QPointF farEnd = (dist1 > dist2) ? P1 : P2;
+    QPointF farEnd = (dist1 > std::hypot(P2.x() - shipPos.x(), P2.y() - shipPos.y())) ? P1 : P2;
     
-    // Create offset line with gap
+    // SIMPLE: Just draw a thick line on one side
     QPointF dir = shipPos - farEnd;
     QPointF normal(-dir.y(), dir.x());
-    qreal len = std::hypot(normal.x(), normal.y());
-    normal /= len;
+    normal /= std::hypot(normal.x(), normal.y());
     
-    bool shipLeft = sideOfLine(farEnd, shipPos, shipPos + normal) > 0;
-    const qreal gap = 10.0;
-    QPointF offset = shipLeft ? normal * gap : normal * (-gap);
+    // Determine which side to shade (opposite of ship vector)
+    QPointF shipVector = QPointF(0, -S_own*6); // ship goes north
+    bool shadeRight = (normal.x() * shipVector.x() + normal.y() * shipVector.y()) < 0;
     
-    QPointF offsetStart = farEnd + offset;
-    QPointF offsetEnd = shipPos + offset;
+    if (!shadeRight) normal = -normal;
     
-    // Build SIMPLE polygon: offset line + 2 far corners only
-    QPolygonF shaded;
-    if (!shipLeft) { // shade right side
-        shaded << offsetStart << offsetEnd 
-               << rect().bottomRight() << rect().topRight();
-    } else { // shade left side  
-        shaded << offsetStart << offsetEnd
-               << rect().bottomLeft() << rect().topLeft();
+    // Create a WIDE band on the shaded side
+    for (int i = 10; i < 200; i += 5) {
+        QPen pen(QColor(80,80,80,30), 5);
+        p.setPen(pen);
+        QPointF offset1 = farEnd + normal * i;
+        QPointF offset2 = shipPos + normal * i;
+        p.drawLine(offset1, offset2);
     }
-    
-    // Draw shaded region
-    p.setBrush(QBrush(QColor(80,80,80,150), Qt::BDiagPattern));
-    p.setPen(Qt::NoPen);
-    p.drawPolygon(shaded);
     
     // Draw green bearing line
     p.setPen(QPen(Qt::green, 4, Qt::SolidLine, Qt::RoundCap));
@@ -399,16 +390,12 @@ void TSAWidget::paintEvent(QPaintEvent *)
     p.setBrush(Qt::yellow); p.setPen(Qt::NoPen); p.drawEllipse(shipPos, 6, 6);
     p.setBrush(Qt::red); p.drawEllipse(sensorPos, 6, 6);
 
-    // Own ship vector (cyan)
-    QPointF ownEnd = shipPos + QPointF(
-        S_own*6*qSin(qDegreesToRadians(C_own)),
-       -S_own*6*qCos(qDegreesToRadians(C_own))
-    );
+    // Own ship vector 
+    QPointF ownEnd = shipPos + QPointF(0, -S_own*6);
     drawArrow(p, shipPos, ownEnd, 12, 25, Qt::cyan, 3);
 
-    // Target vector (red) - perpendicular, on unshaded side
-    QPointF perpendicular = shipLeft ? -normal : normal;
-    QPointF targetStart = sensorPos + perpendicular * 20;
-    QPointF targetEnd = targetStart + perpendicular * 60;
+    // Target vector - perpendicular on unshaded side
+    QPointF targetStart = sensorPos - normal * 20;
+    QPointF targetEnd = targetStart - normal * 60;
     drawArrow(p, targetStart, targetEnd, 12, 25, Qt::red, 3);
 } 
