@@ -349,53 +349,55 @@ void TSAWidget::paintEvent(QPaintEvent *)
 {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
-    
-    // 1) Fill background
     p.fillRect(rect(), Qt::black);
 
-    // 2) Get static positions
     QPointF sensorPos = getSensorPosition();
     QPointF shipPos = getShipPosition();
     
-    // 3) Draw green bearing line (sensor to ship)
-    p.setPen(QPen(Qt::green, 4, Qt::SolidLine, Qt::RoundCap));
-    p.drawLine(sensorPos, shipPos);
-
-    // 4) SIMPLE shaded region: extend line to screen edges, shade one half
+    // 1. Compute full-screen line intersections
     auto full = computeFullLine(sensorPos, shipPos, rect());
     QPointF P1 = full.first, P2 = full.second;
     
-    // 5) Build simple half-space polygon (just the widget corners on one side)
+    // 2. Determine which endpoint is farthest from ship (the "far end")
+    double dist1 = std::hypot(P1.x() - shipPos.x(), P1.y() - shipPos.y());
+    double dist2 = std::hypot(P2.x() - shipPos.x(), P2.y() - shipPos.y());
+    QPointF farEnd = (dist1 > dist2) ? P1 : P2;
+    
+    // 3. Create offset line for shaded region (with gap)
+    QPointF dir = shipPos - farEnd;
+    QPointF normal(-dir.y(), dir.x());  // perpendicular
+    qreal len = std::hypot(normal.x(), normal.y());
+    normal /= len;  // normalize
+    
+    const qreal gap = 10.0;  // gap in pixels
+    QPointF offsetP1 = farEnd + normal * gap;
+    QPointF offsetP2 = shipPos + normal * gap;
+    
+    // 4. Build simple shaded polygon using offset line
     QPolygonF half;
-    bool shadeRight = true; // Always shade right side for now
+    half << offsetP1 << offsetP2 << rect().bottomRight() << rect().topRight();
     
-    if (shadeRight) {
-        // Add points clockwise: P1, P2, bottom-right, top-right
-        half << P1 << P2 << rect().bottomRight() << rect().topRight();
-    } else {
-        // Add points clockwise: P1, P2, top-left, bottom-left
-        half << P1 << P2 << rect().topLeft() << rect().bottomLeft();
-    }
-    
-    // 6) Draw hatch
+    // 5. Draw hatch pattern
     p.setBrush(QBrush(QColor(80,80,80,150), Qt::BDiagPattern));
     p.setPen(Qt::NoPen);
     p.drawPolygon(half);
+    
+    // 6. Draw green bearing line from far end to ship
+    p.setPen(QPen(Qt::green, 4, Qt::SolidLine, Qt::RoundCap));
+    p.drawLine(farEnd, shipPos);
+    
+    // 7. Draw markers and vectors
+    p.setBrush(Qt::yellow); p.setPen(Qt::NoPen); p.drawEllipse(shipPos, 6, 6);
+    p.setBrush(Qt::red); p.drawEllipse(sensorPos, 6, 6);
 
-    // 7) Draw markers
-    p.setBrush(Qt::yellow); p.setPen(Qt::NoPen);
-    p.drawEllipse(shipPos, 6, 6);
-    p.setBrush(Qt::red);
-    p.drawEllipse(sensorPos, 6, 6);
-
-    // 8) Own ship vector (from ship, perpendicular to bearing line)
+    // Own ship vector (cyan)
     QPointF ownEnd = shipPos + QPointF(
         S_own*6*qSin(qDegreesToRadians(C_own)),
        -S_own*6*qCos(qDegreesToRadians(C_own))
     );
     drawArrow(p, shipPos, ownEnd, 12, 25, Qt::cyan, 3);
 
-    // 9) Red vector (from sensor, perpendicular to bearing line)
+    // Adopted track vector (red) 
     QPointF adoptedEnd = sensorPos + QPointF(
         80*qSin(qDegreesToRadians(225.0)),
        -80*qCos(qDegreesToRadians(225.0))
