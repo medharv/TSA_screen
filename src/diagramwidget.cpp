@@ -367,8 +367,12 @@ void TSAWidget::paintEvent(QPaintEvent *)
     QPointF normal(-dir.y(), dir.x());
     normal /= std::hypot(normal.x(), normal.y());
     
-    // Determine which side to shade - always shade the bottom/right side
-    if (normal.y() > 0 || (normal.y() == 0 && normal.x() < 0)) {
+    // FIXED: Determine which side to shade based on ship position
+    bool shipLeft = sideOfLine(farEnd, shipPos, shipPos + QPointF(0, -10)) > 0;
+    if (shipLeft) {
+        // Ship is on left, shade right side (keep normal as-is)
+    } else {
+        // Ship is on right, shade left side (flip normal)
         normal = -normal;
     }
     
