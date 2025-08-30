@@ -64,10 +64,22 @@ private:
                    qreal headLen, qreal headAngleDeg, const QColor &color, int width);
     
     /**
-     * @brief Draws the cross-hatched inactive sensor region
-     * @param p QPainter reference for drawing
+     * @brief Clip the half-space on the sideSelected side of line A→B to the rect
+     * @param A First point of the line
+     * @param B Second point of the line
+     * @param bounds Widget rectangle bounds
+     * @param sideSelectedIsLeft Whether the selected side is left of the line
+     * @return Polygon representing the clipped half-space
      */
-    void drawHatchedArea(QPainter &p);
+    QPolygonF buildHalfSpacePoly(const QPointF &A, const QPointF &B,
+                                 const QRectF &bounds, bool sideSelectedIsLeft);
+    
+    /**
+     * @brief Builds a convex hull from a set of points using Graham scan
+     * @param points Input points
+     * @return Convex hull polygon
+     */
+    QPolygonF buildConvexHull(const QVector<QPointF> &points);
     
     /**
      * @brief Gets the current own ship position on display
@@ -76,7 +88,7 @@ private:
     QPointF getShipPosition() const;
     
     /**
-     * @brief Gets the current sensor position on display
+     * @brief Gets the current sensor position on the display
      * @return QPointF representing sensor position in widget coordinates
      */
     QPointF getSensorPosition() const;
