@@ -367,16 +367,16 @@ void TSAWidget::paintEvent(QPaintEvent *)
     QPointF normal(-dir.y(), dir.x());
     normal /= std::hypot(normal.x(), normal.y());
     
-    // FIXED: Check which side the ship's vector points to
-    QPointF shipVector = QPointF(0, -S_own*6); // ship moves north
-    QPointF testPoint = shipPos + shipVector; // where ship is heading
+    // FIXED: Check which side the ship vector points to, then shade OPPOSITE side
+    QPointF shipVector = QPointF(0, -S_own*6);
+    QPointF testPoint = shipPos + shipVector;
     
     bool shipVectorLeft = sideOfLine(farEnd, shipPos, testPoint) > 0;
-    if (!shipVectorLeft) {
-        // Ship vector is on right side, so shade left side
+    if (shipVectorLeft) {
+        // Ship vector on LEFT, so shade RIGHT (flip normal)
         normal = -normal;
     }
-    // If ship vector is on left side, shade right side (keep normal as-is)
+    // If ship vector on RIGHT, shade LEFT (keep normal)
     
     // Draw hatched lines - make them more visible
     for (int i = 15; i < 300; i += 8) {
@@ -399,8 +399,8 @@ void TSAWidget::paintEvent(QPaintEvent *)
     QPointF ownEnd = shipPos + QPointF(0, -S_own*6);
     drawArrow(p, shipPos, ownEnd, 12, 25, Qt::cyan, 3);
 
-    // Target vector - perpendicular on unshaded side
-    QPointF targetStart = sensorPos - normal * 20;
-    QPointF targetEnd = targetStart - normal * 60;
+    // FIXED: Target vector - starts FROM bearing line, goes into shaded region
+    QPointF targetStart = sensorPos; // Start exactly on bearing line
+    QPointF targetEnd = targetStart + normal * 80; // Go INTO shaded region
     drawArrow(p, targetStart, targetEnd, 12, 25, Qt::red, 3);
 } 
