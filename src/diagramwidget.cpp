@@ -351,8 +351,12 @@ void TSAWidget::paintEvent(QPaintEvent *)
     // 1) Fill background
     p.fillRect(rect(), Qt::black);
 
-    // 2) Full-screen beam endpoints
-    auto full = computeFullLine(sensor_line_start, sensor_line_end, rect());
+    // 2) Get dynamic positions
+    QPointF sensorPos = getSensorPosition();
+    QPointF shipPos = getShipPosition();
+
+    // 2a) Compute full-screen line for shading calculations only
+    auto full = computeFullLine(sensorPos, shipPos, rect());
     QPointF P1 = full.first, P2 = full.second;
 
     // 3) Gather all vector endpoints
@@ -369,10 +373,10 @@ void TSAWidget::paintEvent(QPaintEvent *)
                   QPointF(45*qSin(qDegreesToRadians(180.0)),
                           -45*qCos(qDegreesToRadians(180.0))));
 
-    // 4) Compute dynamic gap = min distance from endpoints to beam + margin
+    // 4) Compute dynamic gap using sensor→ship segment
     auto distanceToLine = [&](const QPointF &pt) {
-        // |cross(B–A, P–A)| / |B–A|
-        QPointF d = P2 - P1, v = pt - P1;
+        // Distance from point to sensor→ship segment
+        QPointF d = shipPos - sensorPos, v = pt - sensorPos;
         double cross = std::abs(d.x()*v.y() - d.y()*v.x());
         return cross / std::hypot(d.x(), d.y());
     };
@@ -398,10 +402,10 @@ void TSAWidget::paintEvent(QPaintEvent *)
         bp.setPen(Qt::NoPen);
         bp.drawPolygon(half);
 
-        // Clear corridor = 2*gap width
+        // Clear corridor along sensor→ship segment (not full screen)
         bp.setCompositionMode(QPainter::CompositionMode_Clear);
         bp.setPen(QPen(Qt::transparent, gap*2, Qt::SolidLine, Qt::FlatCap));
-        bp.drawLine(P1, P2);
+        bp.drawLine(sensorPos, shipPos);
 
         // Clear around endpoints
         constexpr int R = 12;
@@ -411,12 +415,9 @@ void TSAWidget::paintEvent(QPaintEvent *)
     }
     p.drawImage(0,0,bandImg);
 
-    // 6) Draw beam and vectors
+    // 6) Draw beam from sensor to ship (dynamic length)
     p.setPen(QPen(Qt::green,4,Qt::SolidLine,Qt::RoundCap));
-    p.drawLine(P1,P2);
-
-    QPointF shipPos   = getShipPosition();
-    QPointF sensorPos = getSensorPosition();
+    p.drawLine(sensorPos, shipPos);
     p.setBrush(Qt::yellow); p.setPen(Qt::NoPen); p.drawEllipse(shipPos,6,6);
     p.setBrush(Qt::red);                   p.drawEllipse(sensorPos,6,6);
 
