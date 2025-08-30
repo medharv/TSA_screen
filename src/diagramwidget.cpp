@@ -139,6 +139,29 @@ QPointF TSAWidget::getShipPosition() const
 }
 
 /**
+ * @brief Gets a fixed reference point for consistent shading calculations
+ * @return QPointF representing a fixed ship reference position
+ */
+QPointF TSAWidget::getFixedShipReference() const
+{
+    // Use a fixed reference point that doesn't change during simulation
+    // This ensures consistent shading side determination
+    QPointF center(width()/2, height()/2);
+    return center; // Fixed center reference
+}
+
+/**
+ * @brief Gets a fixed reference point for consistent sensor calculations
+ * @return QPointF representing a fixed sensor reference position
+ */
+QPointF TSAWidget::getFixedSensorReference() const
+{
+    // Use a fixed reference point for consistent bearing line calculations
+    QPointF center(width()/2, height()/2);
+    return center + QPointF(0, -100); // Fixed point above center
+}
+
+/**
  * @brief Gets sensor position on the display
  * @return QPointF representing sensor position in widget coordinates
  */
@@ -365,37 +388,41 @@ void TSAWidget::paintEvent(QPaintEvent *)
     // 1) Fill background
     p.fillRect(rect(), Qt::black);
 
-    // 2) Get dynamic positions  
+    // 2) Get dynamic positions and fixed references
     QPointF sensorPos = getSensorPosition();
     QPointF shipPos = getShipPosition();
+    QPointF fixedShipRef = getFixedShipReference();
+    QPointF fixedSensorRef = getFixedSensorReference();
 
-    // 2a) Compute full-screen intersections of the sensor→ship line
+    // 3) Compute bearing line from far edge to ship
     auto full = computeFullLine(sensorPos, shipPos, rect());
     QPointF P1 = full.first, P2 = full.second;
-
-    // 2b) Determine which endpoint is the "far end" (opposite side from sensor)
+    
+    // Determine far end (opposite side from sensor)
     QPointF farEnd;
     double dist1 = std::hypot(P1.x() - sensorPos.x(), P1.y() - sensorPos.y());
     double dist2 = std::hypot(P2.x() - sensorPos.x(), P2.y() - sensorPos.y());
-    farEnd = (dist1 > dist2) ? P1 : P2;  // Pick the farther point from sensor
+    farEnd = (dist1 > dist2) ? P1 : P2;
 
-    // 3) Gather all vector endpoints
+    // 4) Use FIXED references to determine consistent shading side
+    bool shipSide = sideOfLine(fixedSensorRef, fixedShipRef, shipPos) > 0;
+    bool shadeLeft = !shipSide; // Always opposite side of ship
+
+    // 5) Calculate points on bearing line for vector origins
+    QPointF bearingMidpoint = (farEnd + shipPos) / 2.0; // Midpoint of bearing line
+    QPointF sensorOnLine = sensorPos + (bearingMidpoint - sensorPos) * 0.3; // 30% along line
+
+    // 6) Gather vector endpoints for gap calculation
     QVector<QPointF> endpoints;
-    endpoints << getShipPosition()
-              << (getShipPosition() +
-                  QPointF(S_own*6*qSin(qDegreesToRadians(C_own)),
-                          -S_own*6*qCos(qDegreesToRadians(C_own))))
-              << getSensorPosition()
-              << (getSensorPosition() +
-                  QPointF(80*qSin(qDegreesToRadians(225.0)),
-                          -80*qCos(qDegreesToRadians(225.0))))
-              << (getSensorPosition() + QPointF(25,25) +
-                  QPointF(45*qSin(qDegreesToRadians(180.0)),
-                          -45*qCos(qDegreesToRadians(180.0))));
+    endpoints << shipPos
+              << (shipPos + QPointF(S_own*6*qSin(qDegreesToRadians(C_own)),
+                                   -S_own*6*qCos(qDegreesToRadians(C_own))))
+              << sensorOnLine
+              << (sensorOnLine + QPointF(80*qSin(qDegreesToRadians(225.0)),
+                                        -80*qCos(qDegreesToRadians(225.0))));
 
-    // 4) Compute dynamic gap using farEnd→ship segment
+    // 7) Compute dynamic gap using farEnd→ship segment
     auto distanceToLine = [&](const QPointF &pt) {
-        // Distance from point to farEnd→ship segment
         QPointF d = shipPos - farEnd, v = pt - farEnd;
         double cross = std::abs(d.x()*v.y() - d.y()*v.x());
         return cross / std::hypot(d.x(), d.y());
@@ -404,15 +431,13 @@ void TSAWidget::paintEvent(QPaintEvent *)
     for (auto &pt : endpoints)
         minDist = std::min(minDist, distanceToLine(pt));
 
-    const double safetyMargin = 5.0;          // extra pixels
+    const double safetyMargin = 5.0;
     double gap = minDist + safetyMargin;
 
-    // 5) Build and draw hatched half-space with this gap
-    bool shipLeft  = sideOfLine(P1,P2,getShipPosition()) > 0;
-    bool shadeLeft = shipLeft;
-    QPolygonF half = buildHalfSpacePoly(P1, P2, rect(), shadeLeft);
+    // 8) Build and draw hatched half-space with consistent shading
+    QPolygonF half = buildHalfSpacePoly(farEnd, shipPos, rect(), shadeLeft);
 
-    // Render to off-screen image to preserve background
+    // Off-screen rendering
     QImage bandImg(size(), QImage::Format_ARGB32_Premultiplied);
     bandImg.fill(Qt::transparent);
     {
@@ -422,38 +447,44 @@ void TSAWidget::paintEvent(QPaintEvent *)
         bp.setPen(Qt::NoPen);
         bp.drawPolygon(half);
 
-        // Clear corridor along farEnd→ship segment  
+        // Clear corridor along bearing line
         bp.setCompositionMode(QPainter::CompositionMode_Clear);
         bp.setPen(QPen(Qt::transparent, gap*2, Qt::SolidLine, Qt::FlatCap));
         bp.drawLine(farEnd, shipPos);
 
-        // Clear around endpoints
+        // Clear around vector origins
         constexpr int R = 12;
-        for (auto &pt : QVector<QPointF>{ getShipPosition(),
-              getSensorPosition() })
+        for (auto &pt : QVector<QPointF>{shipPos, sensorOnLine})
             bp.drawEllipse(pt, R, R);
     }
     p.drawImage(0,0,bandImg);
 
-    // 6) Draw beam from far screen edge to ship (dynamic end)
+    // 9) Draw bearing line (green beam)
     p.setPen(QPen(Qt::green,4,Qt::SolidLine,Qt::RoundCap));
     p.drawLine(farEnd, shipPos);
-    p.setBrush(Qt::yellow); p.setPen(Qt::NoPen); p.drawEllipse(shipPos,6,6);
-    p.setBrush(Qt::red);                   p.drawEllipse(sensorPos,6,6);
 
-    // Own-ship vector (cyan)
+    // 10) Draw ship and sensor markers
+    p.setBrush(Qt::yellow); p.setPen(Qt::NoPen); 
+    p.drawEllipse(shipPos,6,6);
+    p.setBrush(Qt::red); 
+    p.drawEllipse(sensorOnLine,6,6);
+
+    // 11) Draw own-ship vector (cyan) from ship position
     QPointF ownEnd = shipPos + QPointF(
         S_own*6*qSin(qDegreesToRadians(C_own)),
        -S_own*6*qCos(qDegreesToRadians(C_own))
     );
     drawArrow(p, shipPos, ownEnd,12,25,Qt::cyan,3);
 
-    // Adopted track (red)
-    QPointF adotEnd = sensorPos + QPointF(
+    // 12) Draw adopted track vector (red) from bearing line
+    QPointF adoptedEnd = sensorOnLine + QPointF(
         80*qSin(qDegreesToRadians(225.0)),
        -80*qCos(qDegreesToRadians(225.0))
     );
-    drawArrow(p, sensorPos, adotEnd,12,25,Qt::red,3);
+    drawArrow(p, sensorOnLine, adoptedEnd,12,25,Qt::red,3);
 
-    // Bearing-rate vector removed - no longer displayed
+    // 13) Draw directional arrow on bearing line (white, small)
+    QPointF arrowPos = bearingMidpoint;
+    QPointF arrowDir = QPointF(0, -20); // Points North (ship movement direction)
+    drawArrow(p, arrowPos, arrowPos + arrowDir, 8, 20, Qt::white, 2);
 } 
