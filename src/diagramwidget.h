@@ -4,6 +4,10 @@
 #include <QWidget>
 #include <QTimer>
 #include <QPointF>
+#include <QPolygonF>
+#include <QRectF>
+#include <QColor>
+#include <QVector>
 #include <QtMath>
 
 /**
