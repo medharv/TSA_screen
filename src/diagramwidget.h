@@ -97,17 +97,7 @@ private:
      */
     QPointF getSensorPosition() const;
     
-    /**
-     * @brief Gets a fixed reference point for consistent shading calculations
-     * @return QPointF representing a fixed ship reference position
-     */
-    QPointF getFixedShipReference() const;
-    
-    /**
-     * @brief Gets a fixed reference point for consistent sensor calculations
-     * @return QPointF representing a fixed sensor reference position
-     */
-    QPointF getFixedSensorReference() const;
+
 
     // ===== SIMULATION LOGIC METHODS =====
     
