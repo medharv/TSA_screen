@@ -1,147 +1,168 @@
-#ifndef TSAWIDGET_H
-#define TSAWIDGET_H
+#ifndef DIAGRAMWIDGET_H
+#define DIAGRAMWIDGET_H
 
 #include <QWidget>
 #include <QTimer>
+#include <QPainter>
+#include <QTransform>
+#include <QVector>
 #include <QPointF>
-#include <QtMath>
+#include <QSize>
+#include <QColor>
 
 /**
- * @brief TSAWidget - Tactical Situation Awareness Display Widget
- * 
- * This widget provides a real-time tactical display for maritime operations,
- * showing sensor coverage, target tracking, and vector analysis. It simulates
- * a naval tactical situation with own ship, target, and various tactical vectors.
- * 
- * Key Features:
- * - Real-time simulation with configurable update intervals
- * - Visual sensor beam and coverage area
- * - Dynamic target tracking with bearing/range calculations
- * - Multiple tactical vectors for analysis
- * - Cross-hatched inactive sensor regions
+ * @brief Tactical vector types for maritime display
  */
-class TSAWidget : public QWidget
-{
-    Q_OBJECT
-
-public:
-    /**
-     * @brief Constructs the TSA display widget
-     * @param parent Parent widget (optional)
-     */
-    explicit TSAWidget(QWidget *parent = nullptr);
-
-protected:
-    /**
-     * @brief Qt paint event handler - renders the tactical display
-     * @param event Paint event information
-     */
-    void paintEvent(QPaintEvent *event) override;
-
-private slots:
-    /**
-     * @brief Updates simulation state every timer interval
-     * 
-     * Called every 2 seconds to update target position, bearing, range,
-     * and bearing rate calculations. Triggers widget repaint.
-     */
-    void updateSimulation();
-
-private:
-    // ===== DRAWING HELPER METHODS =====
-    
-    /**
-     * @brief Draws an arrow with specified parameters
-     * @param p QPainter reference for drawing
-     * @param from Starting point of arrow
-     * @param to Ending point of arrow
-     * @param headLen Length of arrow head
-     * @param headAngleDeg Angle of arrow head in degrees
-     * @param color Arrow color
-     * @param width Arrow line width
-     */
-    void drawArrow(QPainter &p, const QPointF &from, const QPointF &to,
-                   qreal headLen, qreal headAngleDeg, const QColor &color, int width);
-    
-    /**
-     * @brief Clip the half-space on the sideSelected side of line A→B to the rect
-     * @param A First point of the line
-     * @param B Second point of the line
-     * @param bounds Widget rectangle bounds
-     * @param sideSelectedIsLeft Whether the selected side is left of the line
-     * @return Polygon representing the clipped half-space
-     */
-    QPolygonF buildHalfSpacePoly(const QPointF &A, const QPointF &B,
-                                 const QRectF &bounds, bool sideSelectedIsLeft);
-    
-    /**
-     * @brief Builds a convex hull from a set of points using Graham scan
-     * @param points Input points
-     * @return Convex hull polygon
-     */
-    QPolygonF buildConvexHull(const QVector<QPointF> &points);
-    
-    /**
-     * @brief Gets the current own ship position on display
-     * @return QPointF representing ship position in widget coordinates
-     */
-    QPointF getShipPosition() const;
-    
-    /**
-     * @brief Gets the current sensor position on the display
-     * @return QPointF representing sensor position in widget coordinates
-     */
-    QPointF getSensorPosition() const;
-
-    // ===== SIMULATION LOGIC METHODS =====
-    
-    /**
-     * @brief Calculates new target position based on time and movement
-     * 
-     * Updates target_x, target_y, current_bearing, and current_range
-     * based on target course/speed and own ship movement.
-     */
-    void calculateTargetPosition();
-    
-    /**
-     * @brief Calculates range from origin to given coordinates
-     * @param x X coordinate (nautical miles)
-     * @param y Y coordinate (nautical miles)
-     * @return Range in nautical miles
-     */
-    double calculateRange(double x, double y) const;
-    
-    /**
-     * @brief Calculates bearing from origin to given coordinates
-     * @param x X coordinate (nautical miles)
-     * @param y Y coordinate (nautical miles)
-     * @return Bearing in degrees (0-360°)
-     */
-    double calculateBearing(double x, double y) const;
-
-    // ===== MEMBER VARIABLES =====
-    
-    QTimer *timer;                    ///< Timer for simulation updates
-    double current_time_sec;          ///< Current simulation time in seconds
-    double prev_bearing;              ///< Previous bearing for rate calculation
-    double current_bearing;           ///< Current target bearing in degrees
-    double current_range;             ///< Current target range in nautical miles
-    double current_bearing_rate;      ///< Current bearing rate in degrees/second
-
-    // ===== OWN-SHIP FIXED PARAMETERS =====
-    const double C_own = 0.0;         ///< Own ship course over ground (degrees)
-    const double S_own = 10.0;        ///< Own ship speed over ground (knots)
-    const double depth_own = 40.0;    ///< Own ship depth (meters)
-
-    // ===== TARGET SIMULATION PARAMETERS =====
-    double target_course;             ///< Target's course over ground (degrees)
-    double target_speed;              ///< Target's speed over ground (knots)
-    double target_x;                  ///< Target X position (nautical miles)
-    double target_y;                  ///< Target Y position (nautical miles)
-
-    // ===== DISPLAY GEOMETRY =====
-    QPointF sensor_line_start;        ///< Start point of sensor beam line
-    QPointF sensor_line_end;          ///< End point of sensor beam line
+enum class VectorType {
+    OWN_SHIP,           // Own ship movement vector
+    TARGET,             // Target track vector
+    SONAR_BEARING,      // Sonar beam direction
+    ADOPTED_TRACK,      // Adopted target track
+    INTERCEPT_COURSE,   // Intercept course vector
+    COLLISION_AVOIDANCE // Collision avoidance vector
 };
 
-#endif // TSAWIDGET_H 
+/**
+ * @brief Tactical vector data structure
+ */
+struct TacticalVector {
+    QPointF origin;         // Vector origin point (world coordinates)
+    double bearing;          // Vector bearing in degrees
+    double magnitude;        // Vector magnitude in nautical miles
+    VectorType type;         // Vector type classification
+    QColor color;            // Display color
+    int lineWidth;           // Line thickness
+    double headLength;       // Arrow head length
+    double headAngle;        // Arrow head angle in degrees
+    
+    TacticalVector(QPointF o, double b, double m, VectorType t, 
+                   QColor c = Qt::white, int w = 2, 
+                   double hl = 12.0, double ha = 25.0)
+        : origin(o), bearing(b), magnitude(m), type(t), 
+          color(c), lineWidth(w), headLength(hl), headAngle(ha) {}
+};
+
+/**
+ * @brief Sonar beam coverage data
+ */
+struct SonarBeam {
+    QPointF startPoint;      // Beam start position
+    QPointF endPoint;        // Beam end position
+    double width;             // Beam width in degrees
+    QColor color;            // Beam color
+    int lineWidth;           // Line thickness
+    
+    SonarBeam(QPointF start, QPointF end, double w = 2.0, 
+               QColor c = Qt::green, int lw = 4)
+        : startPoint(start), endPoint(end), width(w), color(c), lineWidth(lw) {}
+};
+
+/**
+ * @brief Complete tactical situation package
+ */
+struct TacticalDisplay {
+    QPointF ownShipPosition;     // Own ship position (world coordinates)
+    double ownShipBearing;       // Own ship heading in degrees
+    double ownShipSpeed;         // Own ship speed in knots
+    QVector<TacticalVector> vectors; // All tactical vectors
+    SonarBeam sonarBeam;         // Sonar coverage area
+    double targetBearing;        // Target bearing in degrees
+    double targetRange;          // Target range in nautical miles
+    double bearingRate;          // Bearing rate in degrees/second
+    
+    TacticalDisplay() : ownShipBearing(0.0), ownShipSpeed(10.0), 
+                        targetBearing(45.0), targetRange(4.0), bearingRate(0.0),
+                        sonarBeam(QPointF(0,0), QPointF(0,0), 2.0, Qt::green, 4) {}
+};
+
+/**
+ * @brief Coordinate transformation system
+ */
+class DisplayTransform {
+private:
+    QTransform worldToScreen;    // World to screen transformation
+    QTransform screenToWorld;    // Screen to world transformation
+    QRectF worldBounds;          // World coordinate bounds
+    QSize screenSize;            // Screen size in pixels
+    
+public:
+    DisplayTransform() : worldBounds(-10, -10, 20, 20), screenSize(800, 600) {
+        updateTransform(QSize(800, 600), QRectF(-10, -10, 20, 20), true);
+    }
+    
+    void updateTransform(QSize widgetSize, QRectF bounds, bool maintainAspectRatio = true);
+    QPointF mapToScreen(QPointF worldPoint) const;
+    QPointF mapToWorld(QPointF screenPoint) const;
+    double mapDistanceToScreen(double worldDistance) const;
+    double mapDistanceToWorld(double screenDistance) const;
+    QRectF getWorldBounds() const { return worldBounds; }
+    void setWorldBounds(QRectF bounds) { 
+        worldBounds = bounds; 
+        updateTransform(screenSize, bounds, true); 
+    }
+};
+
+/**
+ * @brief Refactored TSA Widget with clean API and responsive design
+ */
+class TSAWidget : public QWidget {
+    Q_OBJECT
+
+private:
+    QTimer* timer;                    // Simulation update timer
+    TacticalDisplay tacticalData;     // Current tactical situation
+    DisplayTransform transform;        // Coordinate transformation
+    double simulationTime;             // Current simulation time
+    
+    // Drawing functions
+    void drawTacticalVector(QPainter& p, const TacticalVector& vector);
+    void drawSonarBeam(QPainter& p, const SonarBeam& beam);
+    void drawOwnShip(QPainter& p, const QPointF& position);
+    void drawTarget(QPainter& p, const QPointF& position);
+    void drawBackground(QPainter& p);
+    void drawCoordinateGrid(QPainter& p);
+    
+    // Helper functions
+    QPointF calculateVectorEnd(const TacticalVector& vector) const;
+    QPointF getOwnShipScreenPosition() const;
+    QPointF getTargetScreenPosition() const;
+    
+    // Original display methods
+    void drawOneSidedShadedRegion(QPainter& p, QPointF lineStart, QPointF lineEnd, QPointF shipPos);
+    void drawSimpleArrow(QPainter& p, QPointF from, QPointF to, QColor color, int width);
+    
+private slots:
+    void updateSimulation();
+
+protected:
+    void paintEvent(QPaintEvent* event) override;
+    void resizeEvent(QResizeEvent* event) override;
+
+public:
+    explicit TSAWidget(QWidget* parent = nullptr);
+    ~TSAWidget();
+    
+    // Clean API for data updates
+    void updateTacticalData(double ownShipBearing, double ownShipSpeed,
+                           const QVector<TacticalVector>& targetVectors,
+                           double sonarBearing, double bearingRate);
+    
+    // Individual data update methods
+    void updateOwnShip(double bearing, double speed);
+    void updateTarget(double bearing, double range, double bearingRate);
+    void updateSonarBeam(double bearing, double width);
+    void addTacticalVector(const TacticalVector& vector);
+    void clearTacticalVectors();
+    
+    // Configuration methods
+    void setWorldBounds(QRectF bounds);
+    void setSimulationInterval(int milliseconds);
+    void startSimulation();
+    void stopSimulation();
+    
+    // Getters for current state
+    TacticalDisplay getCurrentTacticalData() const { return tacticalData; }
+    DisplayTransform getTransform() const { return transform; }
+};
+
+#endif // DIAGRAMWIDGET_H 

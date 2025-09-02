@@ -2,443 +2,396 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QDebug>
+#include <QtMath>
+#include <QResizeEvent>
 
-/**
- * @brief Constructor - Initializes the TSA display widget
- * 
- * Sets up initial simulation parameters, calculates starting positions,
- * and configures the update timer for continuous simulation.
- * 
- * @param parent Parent widget (optional)
- */
-TSAWidget::TSAWidget(QWidget *parent)
-    : QWidget(parent),
-      timer(new QTimer(this)),
-      current_time_sec(0.0),
-      prev_bearing(0.0),
-      current_bearing(45.0),
-      current_range(0.0),
-      current_bearing_rate(0.0),
-      target_course(90.0),      // Target heading East
-      target_speed(8.0),        // Target speed 8 knots
-      target_x(3.0),            // Initial target X position (nm)
-      target_y(3.0),            // Initial target Y position (nm)
-      sensor_line_start(80, 480),   // Sensor beam start point
-      sensor_line_end(720, 80)      // Sensor beam end point
-{
-    // Calculate initial target position relative to own ship
-    current_range   = calculateRange(target_x, target_y);
-    current_bearing = calculateBearing(target_x, target_y);
-    prev_bearing    = current_bearing;
+// ===== DISPLAY TRANSFORM IMPLEMENTATION =====
 
-    // Set up timer for simulation updates (every 2 seconds)
-    connect(timer, &QTimer::timeout, this, &TSAWidget::updateSimulation);
-    timer->start(2000);  // 2000ms = 2 seconds
+void DisplayTransform::updateTransform(QSize widgetSize, QRectF bounds, bool maintainAspectRatio) {
+    screenSize = widgetSize;
+    worldBounds = bounds;
+    
+    if (maintainAspectRatio) {
+        // Calculate scale factors for both dimensions
+        double scaleX = screenSize.width() / worldBounds.width();
+        double scaleY = screenSize.height() / worldBounds.height();
+        
+        // Use the smaller scale to maintain aspect ratio
+        double scale = qMin(scaleX, scaleY);
+        
+        // Calculate centering offsets
+        double offsetX = (screenSize.width() - worldBounds.width() * scale) / 2.0;
+        double offsetY = (screenSize.height() - worldBounds.height() * scale) / 2.0;
+        
+        // Create transformation matrix
+        worldToScreen = QTransform::fromTranslate(offsetX, offsetY)
+                      .scale(scale, scale)
+                      .translate(-worldBounds.left(), -worldBounds.top());
+    } else {
+        // Stretch to fill widget
+        worldToScreen = QTransform::fromTranslate(0, 0)
+                      .scale(screenSize.width() / worldBounds.width(),
+                             screenSize.height() / worldBounds.height())
+                      .translate(-worldBounds.left(), -worldBounds.top());
+    }
+    
+    // Create inverse transformation
+    screenToWorld = worldToScreen.inverted();
 }
 
-/**
- * @brief Simulation update slot - called every timer interval
- * 
- * Updates target position, recalculates bearing/range/rate,
- * and triggers widget repaint. This is the main simulation loop.
- */
-void TSAWidget::updateSimulation()
+QPointF DisplayTransform::mapToScreen(QPointF worldPoint) const {
+    return worldToScreen.map(worldPoint);
+}
+
+QPointF DisplayTransform::mapToWorld(QPointF screenPoint) const {
+    return screenToWorld.map(screenPoint);
+}
+
+double DisplayTransform::mapDistanceToScreen(double worldDistance) const {
+    // Map a world distance to screen pixels
+    QPointF worldPoint(0, 0);
+    QPointF worldPoint2(worldDistance, 0);
+    QPointF screenPoint1 = mapToScreen(worldPoint);
+    QPointF screenPoint2 = mapToScreen(worldPoint2);
+    return QLineF(screenPoint1, screenPoint2).length();
+}
+
+double DisplayTransform::mapDistanceToWorld(double screenDistance) const {
+    // Map a screen distance to world units
+    QPointF screenPoint(0, 0);
+    QPointF screenPoint2(screenDistance, 0);
+    QPointF worldPoint1 = mapToWorld(screenPoint);
+    QPointF worldPoint2 = mapToWorld(screenPoint2);
+    return QLineF(worldPoint1, worldPoint2).length();
+}
+
+// ===== TSA WIDGET IMPLEMENTATION =====
+
+TSAWidget::TSAWidget(QWidget* parent)
+    : QWidget(parent),
+      timer(new QTimer(this)),
+      simulationTime(0.0)
 {
-    // Store previous bearing for rate calculation
-    prev_bearing = current_bearing;
+    // Initialize tactical data with default values
+    tacticalData.ownShipPosition = QPointF(0, 0);
+    tacticalData.ownShipBearing = 0.0;  // North
+    tacticalData.ownShipSpeed = 10.0;    // 10 knots
     
-    // Advance simulation time
-    current_time_sec += 2.0;
-
-    // Calculate new target position and update measurements
-    calculateTargetPosition();
+    // Set up sonar beam
+    tacticalData.sonarBeam = SonarBeam(
+        QPointF(80, 480),  // Start point
+        QPointF(720, 80),  // End point
+        2.0,                // Width
+        Qt::green,          // Color
+        4                   // Line width
+    );
     
-    // Calculate bearing rate (degrees per second)
-    current_bearing_rate = (current_bearing - prev_bearing) / 2.0;
+    // Add default tactical vectors
+    addTacticalVector(TacticalVector(
+        QPointF(0, 0),                    // Origin (own ship)
+        0.0,                              // Bearing (North)
+        6.0,                              // Magnitude (6 nm)
+        VectorType::OWN_SHIP,             // Type
+        Qt::cyan,                         // Color (cyan for own ship heading)
+        3,                                // Line width
+        12.0,                             // Head length
+        25.0                              // Head angle
+    ));
+    
+    addTacticalVector(TacticalVector(
+        QPointF(3, 3),                    // Origin (sensor position)
+        225.0,                            // Bearing (SW)
+        8.0,                              // Magnitude (8 nm)
+        VectorType::ADOPTED_TRACK,        // Type
+        Qt::red,                          // Color (red for adopted track)
+        3,                                // Line width
+        12.0,                             // Head length
+        25.0                              // Head angle
+    ));
+    
+    // Set up timer for simulation updates
+    connect(timer, &QTimer::timeout, this, &TSAWidget::updateSimulation);
+    timer->start(2000);  // 2 second intervals
+    
+    // Initialize transform
+    transform.setWorldBounds(QRectF(-10, -10, 20, 20));
+}
 
-    // Normalize bearing rate to handle 360° wrap-around
-    if (current_bearing_rate > 180.0)  current_bearing_rate -= 360.0;
-    if (current_bearing_rate < -180.0) current_bearing_rate += 360.0;
+TSAWidget::~TSAWidget() {
+    if (timer) {
+        timer->stop();
+    }
+}
 
-    // Debug output for monitoring simulation
-    qDebug() << "Time:" << current_time_sec
-             << "Bearing:" << current_bearing
-             << "Range:" << current_range
-             << "Rate:"  << current_bearing_rate;
-
-    // Trigger widget repaint to show updated display
+void TSAWidget::updateTacticalData(double ownShipBearing, double ownShipSpeed,
+                                   const QVector<TacticalVector>& targetVectors,
+                                   double sonarBearing, double bearingRate) {
+    // Update own ship data
+    tacticalData.ownShipBearing = ownShipBearing;
+    tacticalData.ownShipSpeed = ownShipSpeed;
+    
+    // Update target data
+    tacticalData.targetBearing = sonarBearing;
+    tacticalData.bearingRate = bearingRate;
+    
+    // Replace target vectors
+    tacticalData.vectors.clear();
+    for (const auto& vector : targetVectors) {
+        tacticalData.vectors.append(vector);
+    }
+    
+    // Trigger repaint
     update();
 }
 
-/**
- * @brief Calculates new target position based on movement over time
- * 
- * Simulates both own ship movement (North at 10 knots) and target movement
- * (East at 8 knots), then calculates relative position and measurements.
- */
-void TSAWidget::calculateTargetPosition()
-{
-    double t = current_time_sec / 3600.0; // Convert seconds to hours
+void TSAWidget::updateOwnShip(double bearing, double speed) {
+    tacticalData.ownShipBearing = bearing;
+    tacticalData.ownShipSpeed = speed;
+    update();
+}
+
+void TSAWidget::updateTarget(double bearing, double range, double bearingRate) {
+    tacticalData.targetBearing = bearing;
+    tacticalData.targetRange = range;
+    tacticalData.bearingRate = bearingRate;
+    update();
+}
+
+void TSAWidget::updateSonarBeam(double bearing, double width) {
+    // Calculate new sonar beam endpoints based on bearing
+    double beamLength = 10.0; // 10 nautical miles
+    QPointF start = QPointF(0, 0);
+    QPointF end = QPointF(
+        beamLength * qSin(qDegreesToRadians(bearing)),
+        -beamLength * qCos(qDegreesToRadians(bearing))
+    );
     
-    // Own ship movement (heading North at 10 knots)
-    double own_x = 0.0;
-    double own_y = S_own * t;  // Northward movement
-
-    // Target movement (heading East at 8 knots)
-    double dx = target_speed * qSin(qDegreesToRadians(target_course)) * t;
-    double dy = target_speed * qCos(qDegreesToRadians(target_course)) * t;
-    double x  = 3.0 + dx;  // Initial X + movement
-    double y  = 3.0 + dy;  // Initial Y + movement
-
-    // Calculate relative position (target position minus own ship position)
-    double rel_x = x - own_x;
-    double rel_y = y - own_y;
-    
-    // Update current measurements
-    current_range   = calculateRange(rel_x, rel_y);
-    current_bearing = calculateBearing(rel_x, rel_y);
+    tacticalData.sonarBeam.startPoint = start;
+    tacticalData.sonarBeam.endPoint = end;
+    tacticalData.sonarBeam.width = width;
+    update();
 }
 
-/**
- * @brief Calculates range (distance) from origin to given coordinates
- * @param x X coordinate in nautical miles
- * @param y Y coordinate in nautical miles
- * @return Range in nautical miles
- */
-double TSAWidget::calculateRange(double x, double y) const
-{
-    return qSqrt(x*x + y*y);  // Pythagorean theorem
+void TSAWidget::addTacticalVector(const TacticalVector& vector) {
+    tacticalData.vectors.append(vector);
+    update();
 }
 
-/**
- * @brief Calculates bearing (direction) from origin to given coordinates
- * @param x X coordinate in nautical miles
- * @param y Y coordinate in nautical miles
- * @return Bearing in degrees (0-360°)
- */
-double TSAWidget::calculateBearing(double x, double y) const
-{
-    double b = qRadiansToDegrees(qAtan2(x, y));
-    return (b < 0.0 ? b + 360.0 : b);  // Normalize to 0-360°
+void TSAWidget::clearTacticalVectors() {
+    tacticalData.vectors.clear();
+    update();
 }
 
-/**
- * @brief Gets own ship position on the display
- * @return QPointF representing ship position in widget coordinates
- */
-QPointF TSAWidget::getShipPosition() const
-{
-    return sensor_line_start + 0.75 * (sensor_line_end - sensor_line_start);
+void TSAWidget::setWorldBounds(QRectF bounds) {
+    transform.setWorldBounds(bounds);
+    update();
 }
 
-/**
- * @brief Gets sensor position on the display
- * @return QPointF representing sensor position in widget coordinates
- */
-QPointF TSAWidget::getSensorPosition() const
-{
-    return sensor_line_start + 0.45 * (sensor_line_end - sensor_line_start);
-}
-
-/**
- * @brief Draws an arrow with specified parameters
- * 
- * Draws a line with arrowhead at the end, useful for displaying
- * velocity vectors and tactical directions.
- * 
- * @param p QPainter reference for drawing
- * @param from Starting point of arrow
- * @param to Ending point of arrow
- * @param headLen Length of arrow head
- * @param headAngleDeg Angle of arrow head in degrees
- * @param color Arrow color
- * @param width Arrow line width
- */
-void TSAWidget::drawArrow(QPainter &p, const QPointF &from, const QPointF &to,
-                          qreal headLen, qreal headAngleDeg,
-                          const QColor &color, int width)
-{
-    // Draw the main arrow shaft
-    p.setPen(QPen(color, width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-    p.drawLine(from, to);
-
-    // Calculate arrow head points
-    qreal angle = qAtan2(to.y() - from.y(), to.x() - from.x());
-    qreal a1 = angle + qDegreesToRadians(180.0 - headAngleDeg);
-    qreal a2 = angle - qDegreesToRadians(180.0 - headAngleDeg);
-
-    QPointF h1(to.x() + headLen * qCos(a1), to.y() + headLen * qSin(a1));
-    QPointF h2(to.x() + headLen * qCos(a2), to.y() + headLen * qSin(a2));
-    
-    // Draw arrow head as filled polygon
-    QPolygonF head; head << to << h1 << h2;
-    p.setBrush(color);
-    p.drawPolygon(head);
-}
-
-/**
- * @brief Helper function to determine which side of a line a point lies on
- * @param A First point of the line
- * @param B Second point of the line  
- * @param P Point to test
- * @return Positive value if P is on "left" side, negative if on "right" side
- */
-static qreal sideOfLine(const QPointF &A, const QPointF &B, const QPointF &P) {
-    // cross((B–A),(P–A))
-    return (B.x()-A.x())*(P.y()-A.y()) - (B.y()-A.y())*(P.x()-A.x());
-}
-
-/**
- * @brief Returns the two points where line through A→B intersects the widget rectangle
- * @param A First point of the line
- * @param B Second point of the line
- * @param rect Widget rectangle bounds
- * @return Pair of intersection points spanning the full widget
- */
-QPair<QPointF,QPointF> computeFullLine(const QPointF &A, const QPointF &B, const QRectF &rect)
-{
-    // Line: parametric P(t)=A+t*(B–A). Compute intersections with each of the four edges.
-    QVector<QPointF> hits;
-    QPointF d = B - A;
-
-    auto intersect = [&](double x, double yMin, double yMax, bool vertical) {
-        // if vertical edge: x=x0, solve t = (x0–Ax)/dx, then y=Ay+t*dy must lie between yMin,yMax
-        // if horizontal edge: same logic swapping axes
-        double t = vertical
-            ? (x - A.x()) / d.x()
-            : (x - A.y()) / d.y();
-        QPointF P = A + t * d;
-        double y = vertical ? P.y() : P.x();
-        if (vertical ? (y >= yMin && y <= yMax)
-                     : (y >= yMin && y <= yMax))
-            hits.append(P);
-    };
-
-    // Left edge (x=rect.left())
-    if (!qFuzzyIsNull(d.x()))
-        intersect(rect.left(), rect.top(), rect.bottom(), /*vertical*/true);
-    // Right edge
-    if (!qFuzzyIsNull(d.x()))
-        intersect(rect.right(), rect.top(), rect.bottom(), true);
-    // Top edge (y=rect.top())
-    if (!qFuzzyIsNull(d.y()))
-        intersect(rect.top(), rect.left(), rect.right(), /*vertical*/false);
-    // Bottom edge
-    if (!qFuzzyIsNull(d.y()))
-        intersect(rect.bottom(), rect.left(), rect.right(), false);
-
-    // Keep only two unique intersection points (simple approach)
-    QVector<QPointF> pts;
-    for (const auto &hit : hits) {
-        bool found = false;
-        for (const auto &pt : pts) {
-            if (qAbs(hit.x() - pt.x()) < 1e-6 && qAbs(hit.y() - pt.y()) < 1e-6) {
-                found = true;
-                break;
-            }
-        }
-        if (!found) {
-            pts.append(hit);
-            if (pts.size() >= 2) break;
-        }
+void TSAWidget::setSimulationInterval(int milliseconds) {
+    if (timer) {
+        timer->setInterval(milliseconds);
     }
-    
-    if (pts.size() >= 2)
-        return { pts[0], pts[1] };
-    return { A, B }; // fallback
 }
 
-/**
- * @brief Clip the half-space on the sideSelected side of line A→B to the rect
- * @param A First point of the line
- * @param B Second point of the line
- * @param bounds Widget rectangle bounds
- * @param sideSelectedIsLeft Whether the selected side is left of the line
- * @return Polygon representing the clipped half-space
- */
-QPolygonF TSAWidget::buildHalfSpacePoly(
-    const QPointF &A, const QPointF &B,
-    const QRectF &bounds,
-    bool sideSelectedIsLeft)
-{
-    // Collect rectangle corners
-    QVector<QPointF> pts = {
-        bounds.topLeft(), bounds.topRight(),
-        bounds.bottomRight(), bounds.bottomLeft()
-    };
-    // Keep corners on selected side
-    QPolygonF poly;
-    for (auto &pt : pts) {
-        bool left = sideOfLine(A, B, pt) > 0;
-        if (left == sideSelectedIsLeft)
-            poly.append(pt);
+void TSAWidget::startSimulation() {
+    if (timer) {
+        timer->start();
     }
-    // Add beam-rect intersections
-    auto inte = computeFullLine(A, B, bounds);
-    for (auto &pt : {inte.first, inte.second}) {
-        bool left = sideOfLine(A, B, pt) > 0;
-        if (left == sideSelectedIsLeft)
-            poly.append(pt);
-    }
-    // Return a convex hull to ensure correct winding
-    return buildConvexHull(QVector<QPointF>(poly.begin(), poly.end()));
 }
 
-/**
- * @brief Builds a convex hull from a set of points using Graham scan
- * @param points Input points
- * @return Convex hull polygon
- */
-QPolygonF TSAWidget::buildConvexHull(const QVector<QPointF> &points)
-{
-    if (points.size() < 3) {
-        return QPolygonF(points);
+void TSAWidget::stopSimulation() {
+    if (timer) {
+        timer->stop();
     }
-    
-    // Find the point with lowest y-coordinate (and leftmost if tied)
-    int lowest = 0;
-    for (int i = 1; i < points.size(); ++i) {
-        if (points[i].y() < points[lowest].y() || 
-            (points[i].y() == points[lowest].y() && points[i].x() < points[lowest].x())) {
-            lowest = i;
-        }
-    }
-    
-    // Sort points by polar angle with respect to lowest point
-    QVector<QPointF> sorted = points;
-    std::swap(sorted[0], sorted[lowest]);
-    
-    // Sort remaining points by polar angle
-    std::sort(sorted.begin() + 1, sorted.end(), [&](const QPointF &a, const QPointF &b) {
-        double angleA = qAtan2(a.y() - sorted[0].y(), a.x() - sorted[0].x());
-        double angleB = qAtan2(b.y() - sorted[0].y(), b.x() - sorted[0].x());
-        return angleA < angleB;
-    });
-    
-    // Graham scan
-    QVector<QPointF> hull;
-    hull.push_back(sorted[0]);
-    hull.push_back(sorted[1]);
-    
-    for (int i = 2; i < sorted.size(); ++i) {
-        while (hull.size() > 1 && 
-               sideOfLine(hull[hull.size()-2], hull[hull.size()-1], sorted[i]) <= 0) {
-            hull.pop_back();
-        }
-        hull.push_back(sorted[i]);
-    }
-    
-    return QPolygonF(hull);
 }
 
-/**
- * @brief Main paint event - renders the complete tactical display
- * 
- * This method draws all visual elements in the correct order:
- * 1. Black background
- * 2. Full far-side half-space with hatch
- * 3. Punch out clear corridor along beam
- * 4. Punch out circles around vector origins
- * 5. Draw beam and vectors on top
- * 
- * @param event Paint event information (unused)
- */
-void TSAWidget::paintEvent(QPaintEvent *)
-{
+void TSAWidget::updateSimulation() {
+    simulationTime += 2.0; // 2 second intervals
+    
+    // Update target position based on time
+    double t = simulationTime / 3600.0; // Convert to hours
+    
+    // Simulate target movement (East at 8 knots)
+    double targetX = 3.0 + 8.0 * t;
+    double targetY = 3.0;
+    
+    // Calculate new bearing and range
+    double dx = targetX;
+    double dy = targetY;
+    double newRange = qSqrt(dx*dx + dy*dy);
+    double newBearing = qRadiansToDegrees(qAtan2(dx, dy));
+    
+    // Update tactical data
+    updateTarget(newBearing, newRange, 0.05); // Fixed bearing rate for demo
+    
+    // Debug output
+    qDebug() << "Time:" << simulationTime
+             << "Bearing:" << newBearing
+             << "Range:" << newRange
+             << "Rate:" << 0.05;
+}
+
+void TSAWidget::resizeEvent(QResizeEvent* event) {
+    QWidget::resizeEvent(event);
+    
+    // Update transform for new size
+    transform.updateTransform(event->size(), transform.getWorldBounds(), true);
+}
+
+void TSAWidget::paintEvent(QPaintEvent* event) {
+    Q_UNUSED(event)
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
-
-    // 1) Fill background
+    
+    // 1. BLACK background
     p.fillRect(rect(), Qt::black);
+    
+    // 2. Calculate bearing line from screen edge to ship position
+    QPointF shipPos(width() * 0.75, height() * 0.25);     // Ship position
+    
+    // Calculate line from bottom-left corner to ship (like original)
+    QPointF lineStart(0, height());                        // Bottom-left screen edge
+    QPointF lineEnd = shipPos;                            // Ends at ship
+    
+    // 3. EXTEND the bearing line beyond the ship to create complete half-plane
+    // Calculate direction vector from start to ship
+    QPointF direction = lineEnd - lineStart;
+    double length = QLineF(lineStart, lineEnd).length();
+    
+    // Extend the line to reach the top-right corner or beyond
+    QPointF extendedEnd = lineStart + direction * (width() + height()) / length;
+    
+    // 4. Calculate sensor position along the bearing line (like original)
+    QPointF sensorPos = lineStart + 0.45 * (lineEnd - lineStart);  // 45% along line
+    
+    // 5. Draw shaded region on ONE SIDE using EXTENDED line (like original)
+    drawOneSidedShadedRegion(p, lineStart, extendedEnd, shipPos);
+    
+    // 6. Draw GREEN bearing line from edge to ship (like original)
+    p.setPen(QPen(Qt::green, 4, Qt::SolidLine, Qt::RoundCap));
+    p.drawLine(lineStart, lineEnd);
+    
+    // 7. Draw YELLOW ship marker
+    p.setBrush(Qt::yellow);
+    p.setPen(Qt::NoPen);
+    p.drawEllipse(shipPos, 6, 6);
+    
+    // 8. Draw RED sensor marker
+    p.setBrush(Qt::red);
+    p.setPen(Qt::NoPen);
+    p.drawEllipse(sensorPos, 6, 6);
+    
+    // 9. Draw CYAN own ship vector FROM bearing line (like original)
+    drawSimpleArrow(p, shipPos, shipPos + QPointF(0, -60), Qt::cyan, 3);
+    
+    // 10. Draw RED target vector FROM sensor position on bearing line
+    drawSimpleArrow(p, sensorPos, sensorPos + QPointF(80, -80), Qt::red, 3);
+}
 
-    // 2) Full-screen beam endpoints
-    auto full = computeFullLine(sensor_line_start, sensor_line_end, rect());
-    QPointF P1 = full.first, P2 = full.second;
+QPointF TSAWidget::calculateVectorEnd(const TacticalVector& vector) const {
+    double angle = qDegreesToRadians(vector.bearing);
+    return vector.origin + QPointF(
+        vector.magnitude * qSin(angle),
+        -vector.magnitude * qCos(angle)
+    );
+}
 
-    // 3) Gather all vector endpoints
-    QVector<QPointF> endpoints;
-    endpoints << getShipPosition()
-              << (getShipPosition() +
-                  QPointF(S_own*6*qSin(qDegreesToRadians(C_own)),
-                          -S_own*6*qCos(qDegreesToRadians(C_own))))
-              << getSensorPosition()
-              << (getSensorPosition() +
-                  QPointF(80*qSin(qDegreesToRadians(225.0)),
-                          -80*qCos(qDegreesToRadians(225.0))))
-              << (getSensorPosition() + QPointF(25,25) +
-                  QPointF(45*qSin(qDegreesToRadians(180.0)),
-                          -45*qCos(qDegreesToRadians(180.0))));
+QPointF TSAWidget::getOwnShipScreenPosition() const {
+    return transform.mapToScreen(tacticalData.ownShipPosition);
+}
 
-    // 4) Compute dynamic gap = min distance from endpoints to beam + margin
-    auto distanceToLine = [&](const QPointF &pt) {
-        // |cross(B–A, P–A)| / |B–A|
-        QPointF d = P2 - P1, v = pt - P1;
-        double cross = std::abs(d.x()*v.y() - d.y()*v.x());
-        return cross / std::hypot(d.x(), d.y());
+QPointF TSAWidget::getTargetScreenPosition() const {
+    // Calculate target position based on bearing and range
+    double angle = qDegreesToRadians(tacticalData.targetBearing);
+    QPointF targetWorld = QPointF(
+        tacticalData.targetRange * qSin(angle),
+        -tacticalData.targetRange * qCos(angle)
+    );
+    return transform.mapToScreen(targetWorld);
+}
+
+// NEW METHOD: Draw one-sided shaded region (like original TSA)
+void TSAWidget::drawOneSidedShadedRegion(QPainter& p, QPointF lineStart, QPointF lineEnd, QPointF shipPos) {
+    QVector<QPointF> corners = {
+        QPointF(0,0),
+        QPointF(width(),0),
+        QPointF(width(),height()),
+        QPointF(0,height())
     };
-    double minDist = std::numeric_limits<double>::infinity();
-    for (auto &pt : endpoints)
-        minDist = std::min(minDist, distanceToLine(pt));
 
-    const double safetyMargin = 5.0;          // extra pixels
-    double gap = minDist + safetyMargin;
+    auto sideTest = [&](const QPointF& pt) {
+        QPointF v1 = lineEnd - lineStart;
+        QPointF v2 = pt - lineStart;
+        return v1.x() * v2.y() - v1.y() * v2.x();
+    };
 
-    // 5) Build and draw hatched half-space with this gap
-    bool shipLeft  = sideOfLine(P1,P2,getShipPosition()) > 0;
-    bool shadeLeft = shipLeft;
-    QPolygonF half = buildHalfSpacePoly(P1, P2, rect(), shadeLeft);
+    // Ship is ON the "reference" side. To shade OPPOSITE, explicitly flip the logic:
+    bool shipOnLeft = sideTest(shipPos) > 0;
+    bool shadeLeft = !shipOnLeft;  // FLIP here!
 
-    // Render to off-screen image to preserve background
-    QImage bandImg(size(), QImage::Format_ARGB32_Premultiplied);
-    bandImg.fill(Qt::transparent);
-    {
-        QPainter bp(&bandImg);
-        bp.setRenderHint(QPainter::Antialiasing);
-        bp.setBrush(QBrush(QColor(80,80,80,150), Qt::BDiagPattern));
-        bp.setPen(Qt::NoPen);
-        bp.drawPolygon(half);
+    // Create offset line for shading (1/2 inch gap from bearing line)
+    // Convert 1/2 inch to pixels (assuming 96 DPI = 1 inch = 96 pixels)
+    double halfInchPixels = 48.0;  // 96 DPI / 2
+    
+    // Calculate perpendicular vector for offset
+    QPointF lineVector = lineEnd - lineStart;
+    double lineLength = QLineF(lineStart, lineEnd).length();
+    QPointF perpVector(-lineVector.y(), lineVector.x());  // 90 degree rotation
+    perpVector = perpVector / lineLength;  // Normalize
+    
+    // Offset the line away from the ship side
+    QPointF offsetDirection = (shadeLeft ? perpVector : -perpVector);
+    QPointF offsetStart = lineStart + offsetDirection * halfInchPixels;
+    QPointF offsetEnd = lineEnd + offsetDirection * halfInchPixels;
 
-        // Clear corridor = 2*gap width
-        bp.setCompositionMode(QPainter::CompositionMode_Clear);
-        bp.setPen(QPen(Qt::transparent, gap*2, Qt::SolidLine, Qt::FlatCap));
-        bp.drawLine(P1, P2);
-
-        // Clear around endpoints
-        constexpr int R = 12;
-        for (auto &pt : QVector<QPointF>{ getShipPosition(),
-              getSensorPosition() })
-            bp.drawEllipse(pt, R, R);
+    // Build polygon with ALL corners on the shaded side, then add offset line
+    QPolygonF shadePoly;
+    
+    // Add all corners on the shaded side
+    for (const QPointF& c : corners) {
+        if ((sideTest(c) > 0) == shadeLeft) {
+            shadePoly << c;
+        }
     }
-    p.drawImage(0,0,bandImg);
+    
+    // Add offset line points to close the polygon
+    // Order matters: add offsetEnd first, then offsetStart to connect properly
+    shadePoly << offsetEnd;
+    shadePoly << offsetStart;
+    
+    // Ensure we have enough points for a valid polygon
+    if (shadePoly.size() >= 3) {
+        // Draw shaded area
+        p.setBrush(QBrush(QColor(80,80,80,150), Qt::BDiagPattern));
+        p.setPen(Qt::NoPen);
+        p.drawPolygon(shadePoly);
 
-    // 6) Draw beam and vectors
-    p.setPen(QPen(Qt::green,4,Qt::SolidLine,Qt::RoundCap));
-    p.drawLine(P1,P2);
+        // White outline
+        p.setBrush(Qt::NoBrush);
+        p.setPen(QPen(Qt::white, 2, Qt::SolidLine));
+        p.drawPolygon(shadePoly);
+    }
+}
 
-    QPointF shipPos   = getShipPosition();
-    QPointF sensorPos = getSensorPosition();
-    p.setBrush(Qt::yellow); p.setPen(Qt::NoPen); p.drawEllipse(shipPos,6,6);
-    p.setBrush(Qt::red);                   p.drawEllipse(sensorPos,6,6);
-
-    // Own-ship vector (cyan)
-    QPointF ownEnd = shipPos + QPointF(
-        S_own*6*qSin(qDegreesToRadians(C_own)),
-       -S_own*6*qCos(qDegreesToRadians(C_own))
-    );
-    drawArrow(p, shipPos, ownEnd,12,25,Qt::cyan,3);
-
-    // Adopted track (red)
-    QPointF adotEnd = sensorPos + QPointF(
-        80*qSin(qDegreesToRadians(225.0)),
-       -80*qCos(qDegreesToRadians(225.0))
-    );
-    drawArrow(p, sensorPos, adotEnd,12,25,Qt::red,3);
-
-    // Bearing-rate (cyan)
-    QPointF rateStart = sensorPos + QPointF(25,25);
-    QPointF rateEnd = rateStart + QPointF(
-        45*qSin(qDegreesToRadians(180.0)),
-       -45*qCos(qDegreesToRadians(180.0))
-    );
-    drawArrow(p, rateStart, rateEnd,8,30,Qt::cyan,2);
+void TSAWidget::drawSimpleArrow(QPainter& p, QPointF from, QPointF to, QColor color, int width) {
+    // Draw arrow shaft
+    p.setPen(QPen(color, width, Qt::SolidLine, Qt::RoundCap));
+    p.drawLine(from, to);
+    
+    // Draw small arrow head (not large polygon)
+    double angle = qAtan2(to.y() - from.y(), to.x() - from.x());
+    double headLen = 12.0;
+    double headAngle = qDegreesToRadians(25.0);
+    
+    QPointF h1(to.x() + headLen * qCos(angle + M_PI - headAngle),
+               to.y() + headLen * qSin(angle + M_PI - headAngle));
+    QPointF h2(to.x() + headLen * qCos(angle + M_PI + headAngle),
+               to.y() + headLen * qSin(angle + M_PI + headAngle));
+    
+    QPolygonF head;
+    head << to << h1 << h2;
+    
+    p.setBrush(color);
+    p.setPen(Qt::NoPen);
+    p.drawPolygon(head);
 } 
